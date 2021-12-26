@@ -1,3 +1,6 @@
+# Use " python Lucas-Kanade-Optical-Flow.py FLIR_2.mp4 " in the python terminal to run 
+# code on video called FLIR_2.mp4 in same folder as Lucas-Kanade-Optical-Flow.py file
+
 import numpy as np
 import cv2 as cv
 import argparse
