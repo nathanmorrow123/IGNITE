@@ -1,0 +1,132 @@
+import numpy as np
+import cv2 as cv
+import argparse
+
+
+def getNewReference(mask_):  # Resets variables in order to find and display new reference points
+    p0_ = cv.goodFeaturesToTrack(old_gray, mask=None, **feature_params)  # find new GFTTs
+    mask_ = np.zeros_like(mask_)  # erase line mask
+    refX_ = p0_[:, 0][:, 0].tolist()  # refX is the list of x coordinates in p0_
+    refY_ = p0_[:, 0][:, 1].tolist()  # refY is the list of y coordinates in p0_
+    refCount_ = len(p0_)
+    return p0_, mask_, refX_, refY_, refCount_
+
+
+def comparePoints(image, refX_, refY_, curX, curY, GOOD_THRESH=3):
+    # Compare x values
+    if refX_ - GOOD_THRESH < curX < refX_ + GOOD_THRESH:
+        textX = "GOOD"
+    elif curX > refX_:
+        textX = "left"
+    elif curX < refX_:
+        textX = "right"
+    else:
+        textX = " "
+
+    # Compare y values
+    if refY_ - GOOD_THRESH < curY < refY_ + GOOD_THRESH:
+        textY = "GOOD"
+    elif curY > refY_:
+        textY = "up"
+    elif curY < refY_:
+        textY = "down"
+    else:
+        textY = " "
+
+    text = "X: {}".format(textX)
+    cv.putText(image, text, (20, 20),
+               cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+    text = "Y: {}".format(textY)
+    cv.putText(image, text, (20, 40),
+               cv.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+
+
+parser = argparse.ArgumentParser(description='test')
+
+parser.add_argument('image', type=str, help='path to image file')
+args = parser.parse_args()
+cap = cv.VideoCapture(args.image)
+
+# params for Shi Tomasi corner detection
+feature_params = dict(maxCorners=20,
+                      qualityLevel=0.3,
+                      minDistance=20,
+                      blockSize=7)
+# Parameters for lucas kanade optical flow
+lk_params = dict(winSize=(15, 15),
+                 maxLevel=2,
+                 criteria=(cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 10, 0.03))
+# Create some random colors
+color = np.random.randint(0, 255, (100, 3))
+# Take first frame and find corners in it
+ret, old_frame = cap.read()
+old_gray = cv.cvtColor(old_frame, cv.COLOR_BGR2GRAY)
+
+p0, mask, refX, refY, refCount = getNewReference(old_frame)
+
+good_new = None
+
+while True:
+
+    if len(p0) < refCount / 2:
+        p0, mask, refX, refY, refCount = getNewReference(mask)
+
+    ret, frame = cap.read()
+    if not ret:
+        print('No frames grabbed!')
+        break
+    frame_gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+
+    if good_new is not None:
+        good_new_prev = good_new
+
+    # calculate optical flow
+    p1, st, err = cv.calcOpticalFlowPyrLK(old_gray, frame_gray, p0, None, **lk_params)
+
+    # Select good points
+    if p1 is not None:
+        good_new = p1[st == 1]
+        good_old = p0[st == 1]
+        bad_old = p0[st == 0]
+
+    if len(bad_old) != 0:  # True when a point leaves the screen
+        remove_ID = []
+        for i in range(0, len(bad_old)):  # Will loop through all points that left the screen
+            if bad_old[i] in good_new_prev:
+                extract_element = np.where(good_new_prev == bad_old[i])  # Find the element number that left the frame
+                remove_ID.append(extract_element[0][0])
+        remove_ID.sort(reverse=True)  # Sort in descending order to avoid IndexError
+        for i in range(0, len(remove_ID)):  # Corresponding points are deleted from refX & refY simultaneously
+            del refX[remove_ID[i]]
+            del refY[remove_ID[i]]
+
+    # draw the tracks
+    for i, (new, old) in enumerate(zip(good_new, good_old)):  # draws tracks for each point
+        nX, nY = new.ravel()
+        oX, oY = old.ravel()
+
+        mask = cv.line(mask, (int(nX), int(nY)), (int(oX), int(oY)), color[i].tolist(), 2)
+        frame = cv.circle(frame, (int(nX), int(nY)), 5, (255, 0, 0), -1)  # Blue circle are current frame
+        frame = cv.circle(frame, (int(refX[i]), int(refY[i])), 5, (0, 0, 255), -1)  # Red circles are reference points
+
+        cv.putText(frame, str(i), (int(refX[i]), int(refY[i])), cv.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        cv.putText(frame, str(i), (int(nX), int(nY)), cv.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        # comparePoints(frame, refX[i], refY[i], nX, nY)
+
+    img = cv.add(frame, mask)
+    cv.imshow('frame', img)
+
+    # Now update the previous frame and previous points
+    old_gray = frame_gray.copy()
+    p0 = good_new.reshape(-1, 1, 2)
+
+    k = cv.waitKey(30) & 0xff
+    if k == ord('q'):
+        break
+    elif k == ord('c'):
+        p0, mask, refX, refY, refCount = getNewReference(mask)
+    elif k == 32:  # spacebar
+        while (cv.waitKey(1000) & 0xff) == 32:
+            pass
+
+cv.destroyAllWindows()
